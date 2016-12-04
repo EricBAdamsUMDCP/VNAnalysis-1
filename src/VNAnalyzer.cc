@@ -61,6 +61,9 @@ using namespace std;
 #include "RecoHI/HiEvtPlaneAlgos/interface/LoadEPDB.h"
 using namespace hi;
 
+static const int ntrkbins = 16;
+static const  int trkBins[]={0,20,30,40,50,60,80,100,120,150,185,220,260,300,350,500,1000};
+
 static const int nptbinsDefault = 9;
 static const double ptbinsDefault[]={12.0, 14.0, 20.0, 26.0, 35.0, 45.0, 60.0, 80.0, 100., 200.};
 //  0.2,  0.3,  0.4,  0.5,  0.6,  0.8,  1.0,  1.2,  1.6,  2.0,
@@ -72,6 +75,7 @@ static const double ptbinsMBDefault[]={0.3,0.4,0.5,  0.6,  0.8,  1.0,  1.25,  1.
 				       2.5,  3.0,  3.5,  4.0,  5.0,  6.0,  7.0, 8.0, 
 				       10.0, 12.,14.0, 20.,26.,35.,45.,60.,80.,100.,200.,10000000.};
 
+static const int MaxTracks = 50;
 
 //static const int nptbinsDefault = 24;
 //static const double ptbinsDefault[]={0.6,0.8,
@@ -93,6 +97,12 @@ public:
   ~VNAnalyzer();
       
 private:
+  int NtrkToBin(int ntrk){
+    for(int i = 0; i<=ntrkbins; i++) {
+      if(ntrk < trkBins[i]) return i;
+    }
+    return ntrkbins;
+  }
   virtual void beginJob() ;
   virtual void analyze(const edm::Event&, const edm::EventSetup&);
   virtual void endJob() ;
@@ -157,6 +167,8 @@ private:
   int nvtx_;
   double minvz_;
   double maxvz_;
+  double dzerr_;
+  double chi2_;
 
   double dzdzerror_;
   double d0d0error_;
@@ -171,10 +183,15 @@ private:
   Double_t qy[NumEPNames];
   Double_t q[NumEPNames];
   Double_t epmult[NumEPNames];
+  Double_t sumw[NumEPNames];
+  Double_t sumw2[NumEPNames];
   Double_t vn[NumEPNames];
 
   Double_t rescor[NumEPNames];
   Double_t rescorErr[NumEPNames];
+  TH1D * hPsi[NumEPNames];
+  TH1D * hPsiOffset[NumEPNames];
+  TH1D * hPsiFlat[NumEPNames];
 
 
   unsigned int runno_;
@@ -202,10 +219,19 @@ private:
   TH2D * avpt;
   HiEvtPlaneFlatten * flat[NumEPNames];
   bool loadDB_;
+  bool useNtrkBins_; 
+  bool bypassCentrality_;
   bool FirstEvent_;
   bool MB_;
   int minrun_;
   int maxrun_;
+
+
+  int ntrack;
+  float sppt[MaxTracks];
+  float spphi[MaxTracks];
+  float speta[MaxTracks];
+
   int getNoff(const edm::Event& iEvent, const edm::EventSetup& iSetup, double cent)
   {
     int Noff = 0;
@@ -223,97 +249,134 @@ private:
     avpt->Reset();
     
     iEvent.getByToken(vertexToken,vertex_);
-    const VertexCollection * recoVertices = vertex_.product();
+    VertexCollection recoVertices = *vertex_;
+    if ( recoVertices.size() > 100 ) return -1;
+    sort(recoVertices.begin(), recoVertices.end(), [](const reco::Vertex &a, const reco::Vertex &b){
+	if ( a.tracksSize() == b.tracksSize() ) return a.chi2() < b.chi2();
+	return a.tracksSize() > b.tracksSize();
+      });
+   
     int primaryvtx = 0;
-    math::XYZPoint v1( (*recoVertices)[primaryvtx].position().x(), (*recoVertices)[primaryvtx].position().y(), (*recoVertices)[primaryvtx].position().z() );
-    double vxError = (*recoVertices)[primaryvtx].xError();
-    double vyError = (*recoVertices)[primaryvtx].yError();
-    double vzError = (*recoVertices)[primaryvtx].zError();
+   
+    double vz = recoVertices[primaryvtx].z();
+    if (fabs(vz) < -15 || fabs(vz) > 15) {
+      return -1;
+    }
+ 
+    math::XYZPoint v1( recoVertices[primaryvtx].position().x(), recoVertices[primaryvtx].position().y(), recoVertices[primaryvtx].position().z() );
+    double vxError = recoVertices[primaryvtx].xError();
+    double vyError = recoVertices[primaryvtx].yError();
+    double vzError = recoVertices[primaryvtx].zError();
+    
+
     iEvent.getByLabel(trackTag_,trackCollection_);
     for(TrackCollection::const_iterator itTrack = trackCollection_->begin(); itTrack != trackCollection_->end(); ++itTrack) {    
       if ( !itTrack->quality(reco::TrackBase::highPurity) ) continue;
       if ( itTrack->charge() == 0 ) continue;
-           double d0 = -1.* itTrack->dxy(v1);
-      double derror=sqrt(itTrack->dxyError()*itTrack->dxyError()+vxError*vyError);
-      double dz=itTrack->dz(v1);
-      double dzerror=sqrt(itTrack->dzError()*itTrack->dzError()+vzError*vzError);
+      if(fabs(itTrack->pt()) > 2.4 ) continue;
+
       if ( fabs(itTrack->eta()) > 2.4 ) continue;
-      if ( fabs( dz/dzerror ) > 3. ) continue;
-      if ( fabs( d0/derror ) > 3. ) continue;
-      if ( itTrack->ptError()/itTrack->pt() > 0.1 ) continue;
-      if ( itTrack->pt() < 0.4 ) continue;
+      bool bPix = false;
+      int nHits = itTrack->numberOfValidHits();
+      if ( itTrack->pt() < 2.4 and (nHits==3 or nHits==4 or nHits==5 or nHits==6) ) bPix = true;
+      if ( not bPix ) {
+	if ( nHits < 11 ) continue;
+	if ( itTrack->normalizedChi2() / itTrack->hitPattern().trackerLayersWithMeasurement() > 0.15 ) {
+	  continue;
+	}
+	if ( itTrack->ptError()/itTrack->pt() > 0.1 ) {
+	  continue;
+	}
+	if (
+	    itTrack->pt() > 2.4 and
+	    itTrack->originalAlgo() != 4 and
+	    itTrack->originalAlgo() != 5 and
+	    itTrack->originalAlgo() != 6 and
+	    itTrack->originalAlgo() != 7
+	    ) {
+	  continue;
+	}
+	
+	double d0 = -1.* itTrack->dxy(v1);
+	double derror=sqrt(itTrack->dxyError()*itTrack->dxyError()+vxError*vyError);
+	if ( fabs( d0/derror ) > 3.0 ) {
+	  continue;
+	}
+	
+	double dz=itTrack->dz(v1);
+	double dzerror=sqrt(itTrack->dzError()*itTrack->dzError()+vzError*vzError);
+	if ( fabs( dz/dzerror ) > 3.0 ) {
+	  continue;
+	}
+      }
+      
       if(itTrack->eta()<1&&cent>=0&&cent<5) hptNtrk->Fill(itTrack->pt());
       Noff++;
     }
     if(Noff < Noffmin_ || Noff > Noffmax_) return -2;
 
-    // //Noff done.  Now apply tighter cuts.  
-    // //Return -3 nvtx_ failed
-    // //Return -4 minvz_ or maxvz_ failed
-    // //Return -5 vtx track size
-    
 
-    VertexCollection recoV = *vertex_;
-
-    if ( (int) recoV.size() > nvtx_ ) return -3;
-    // //sort( recoV.begin(), recoV.end(), [](const reco::Vertex &a, const reco::Vertex &b){
-    // //	if ( a.tracksSize() == b.tracksSize() ) return a.chi2() < b.chi2() ? true:false;
-    // //	return a.tracksSize() > b.tracksSize() ? true:false;
-    // //  });
-    
-    primaryvtx = 0;
-    math::XYZPoint vv1( recoV[primaryvtx].position().x(), recoV[primaryvtx].position().y(), recoV[primaryvtx].position().z() );
-    vxError = recoV[primaryvtx].xError();
-    vyError = recoV[primaryvtx].yError();
-    vzError = recoV[primaryvtx].zError();
-    
-    double vz = recoV[primaryvtx].z();
-    if (vz < minvz_ || vz > maxvz_) {
-      //cout << __LINE__ << " vz = " << vz << endl;
-      return -4;
-    }
-    if(recoV[primaryvtx].tracksSize() < 1) {
-      return -5;
-    }
     for(TrackCollection::const_iterator itTrack = trackCollection_->begin(); itTrack != trackCollection_->end(); ++itTrack) {    
-      if ( !itTrack->quality(reco::TrackBase::highPurity) )  continue;
+      if ( !itTrack->quality(reco::TrackBase::highPurity) ) continue;
       if ( itTrack->charge() == 0 ) continue;
-      double d0 = -1.* itTrack->dxy(vv1);
-      double derror=sqrt(itTrack->dxyError()*itTrack->dxyError()+vxError*vyError);
-      double dz=itTrack->dz(vv1);
-      double dzerror=sqrt(itTrack->dzError()*itTrack->dzError()+vzError*vzError);
+      if(fabs(itTrack->pt()) > 2.4 ) continue;
+      
       if ( fabs(itTrack->eta()) > 2.4 ) continue;
-      if ( fabs( dz/dzerror ) > dzdzerror_ ) continue;
-      if ( fabs( d0/derror ) > d0d0error_ ) continue;
-      if ( fabs(itTrack->ptError())/itTrack->pt() > pterror_ ) continue;
-
-      if ( itTrack->numberOfValidHits() < 11 ) continue;
-      double algoOffline = itTrack->algo();
-      if(!(algoOffline==4 || algoOffline==6 || algoOffline==7 || algoOffline==5 || algoOffline==11)) continue;      
-      if ( itTrack->normalizedChi2() / itTrack->hitPattern().trackerLayersWithMeasurement() > 0.15 ) continue;
-      if (!CaloMatch(*itTrack, iEvent, itTrack - trackCollection_->begin()) ) continue;
+      bool bPix = false;
+      int nHits = itTrack->numberOfValidHits();
+      if ( itTrack->pt() < 2.4 and (nHits==3 or nHits==4 or nHits==5 or nHits==6) ) bPix = true;
+      if ( not bPix ) {
+	if ( nHits < 11 ) continue;
+	if ( itTrack->normalizedChi2() / itTrack->hitPattern().trackerLayersWithMeasurement() > 0.15 ) {
+	  continue;
+	}
+	if ( itTrack->ptError()/itTrack->pt() > 0.1 ) {
+	  continue;
+	}
+	if (
+	    itTrack->pt() > 2.4 and
+	    itTrack->originalAlgo() != 4 and
+	    itTrack->originalAlgo() != 5 and
+	    itTrack->originalAlgo() != 6 and
+	    itTrack->originalAlgo() != 7
+	    ) {
+	  continue;
+	}
+	
+	double d0 = -1.* itTrack->dxy(v1);
+	double derror=sqrt(itTrack->dxyError()*itTrack->dxyError()+vxError*vyError);
+	if ( fabs( d0/derror ) > 3.0 ) {
+	  continue;
+	}
+	
+	double dz=itTrack->dz(v1);
+	double dzerror=sqrt(itTrack->dzError()*itTrack->dzError()+vzError*vzError);
+	if ( fabs( dz/dzerror ) > 3.0 ) {
+	  continue;
+	}
+      }
       if(itTrack->eta()<1&&cent>=0&&cent<5&&itTrack->pt()>0.4) hptNtrkGood->Fill(itTrack->pt());
       qxtrk->Fill(itTrack->pt(), itTrack->eta(), TMath::Cos(EPOrder_*itTrack->phi()));
-      qytrk->Fill(itTrack->pt(), itTrack->eta(), TMath::Sin(EPOrder_*itTrack->phi()));
+      qytrk->Fill(itTrack->pt(),itTrack->eta(), TMath::Sin(EPOrder_*itTrack->phi()));
       qcnt->Fill(itTrack->pt(), itTrack->eta());
       avpt->Fill(itTrack->pt(), itTrack->eta(), itTrack->pt());
-
+      
       if(teff) {
-    	double w = teff->getEfficiencies(itTrack->pt(),cent,itTrack->phi(),itTrack->eta());
-    	if(w>0.0 ) {
-    	  wqxtrk->Fill(itTrack->pt(), itTrack->eta(), TMath::Cos(EPOrder_*itTrack->phi())/w);
-    	  wqytrk->Fill(itTrack->pt(), itTrack->eta(), TMath::Sin(EPOrder_*itTrack->phi())/w);
-    	  wqcnt->Fill(itTrack->pt(), itTrack->eta());
-    	  weff->Fill(itTrack->pt(), itTrack->eta(),1/w);
-          hw[(int)(cent/10.)]->Fill(itTrack->phi(),itTrack->eta(), 1/w);
-          hEff[(int)(cent/10.)]->Fill(itTrack->phi(),itTrack->eta(), 1.);
-
-    	}
+	double w = teff->getEfficiencies(itTrack->pt(),cent,itTrack->phi(),itTrack->eta());
+	if(w>0.0 ) {
+	  wqxtrk->Fill(itTrack->pt(), itTrack->eta(), TMath::Cos(EPOrder_*itTrack->phi())/w);
+	  wqytrk->Fill(itTrack->pt(), itTrack->eta(), TMath::Sin(EPOrder_*itTrack->phi())/w);
+	  wqcnt->Fill(itTrack->pt(), itTrack->eta());
+	  weff->Fill(itTrack->pt(), itTrack->eta(),1/w);
+	  hw[(int)(cent/10.)]->Fill(itTrack->phi(),itTrack->eta(), 1/w);
+	  hEff[(int)(cent/10.)]->Fill(itTrack->phi(),itTrack->eta(), 1.);
+	  
+	}
       }
-      if( itTrack->pt() < 0.5 ) continue;
+      
+      if( itTrack->pt() < 0.2 ) continue;
       if(!teff) hEff[(int)(cent/10.)]->Fill(itTrack->phi(),itTrack->eta());
     }
-
     return Noff;
   }
 
@@ -370,7 +433,6 @@ VNAnalyzer::VNAnalyzer(const edm::ParameterSet& iConfig):runno_(0)
     std::cout<<"trackToken is uninitialized."<<std::endl;
   }
 
-
   inputPlanesTag_ = iConfig.getParameter<edm::InputTag>("inputPlanesTag_");
   inputPlanesToken = consumes<reco::EvtPlaneCollection>(inputPlanesTag_);
   if(inputPlanesToken.isUninitialized()) {
@@ -405,6 +467,8 @@ VNAnalyzer::VNAnalyzer(const edm::ParameterSet& iConfig):runno_(0)
   if(!effTable_.empty()) teff = new TrackEfficiency(effTable_.data());
   minvz_ = iConfig.getUntrackedParameter<double>("minvz_", -15.);
   maxvz_ = iConfig.getUntrackedParameter<double>("maxvz_", 15.);
+  dzerr_ = iConfig.getParameter<double>("dzerr") ;
+  chi2_  = iConfig.getParameter<double>("chi2") ;
 
   std::cout<<"==============================================="<<std::endl;
   std::cout<<"centralityBinTag_           "<<centralityBinTag_.encode()<<std::endl;
@@ -434,6 +498,8 @@ VNAnalyzer::VNAnalyzer(const edm::ParameterSet& iConfig):runno_(0)
   if(MB_) {
     std::cout<<"MB_                          true"<<std::endl;
   }
+  std::cout<<"dzerr_                       "<<dzerr_<<std::endl;
+  std::cout<<"chi2_                        "<<chi2_<<std::endl;
   std::cout<<"==============================================="<<std::endl;
 
   hNtrkoff = fs->make<TH1D>("Ntrkoff","Ntrkoff",1001,0,3000);
@@ -447,6 +513,7 @@ VNAnalyzer::VNAnalyzer(const edm::ParameterSet& iConfig):runno_(0)
       ptbins[i] = ptbinsDefault[i];
     }
   }
+  std::cout<<"npt: "<<npt<<std::endl;
   qxtrk = fs->make<TH2D>(Form("qxtrk_v%d",EPOrder_),Form("qxtrk_v%d",EPOrder_),npt,ptbins, netabinsDefault, etabinsDefault);
   qytrk = fs->make<TH2D>(Form("qytrk_v%d",EPOrder_),Form("qytrk_v%d",EPOrder_),npt,ptbins, netabinsDefault, etabinsDefault);
   qcnt =  fs->make<TH2D>(Form("qcnt_v%d",EPOrder_), Form("qcnt_v%d",EPOrder_),npt,ptbins, netabinsDefault, etabinsDefault);
@@ -485,13 +552,35 @@ VNAnalyzer::VNAnalyzer(const edm::ParameterSet& iConfig):runno_(0)
   }
   TString epnames = EPNames[0].data();
   epnames = epnames+"/D";
+
   for(int i = 0; i<NumEPNames; i++) {
     if(i>0) epnames = epnames + ":" + EPNames[i].data() + "/D";
     TFileDirectory subdir = fs->mkdir(Form("%s",EPNames[i].data()));
     flat[i] = new HiEvtPlaneFlatten();
     flat[i]->init(FlatOrder_,NumFlatBins_,EPNames[i],EPOrder[i]);
+    Double_t psirange = 4;
+    if(EPOrder[i]==1 ) psirange = 3.5;
+    if(EPOrder[i]==2 ) psirange = 2;
+    if(EPOrder[i]==3 ) psirange = 1.5;
+    if(EPOrder[i]==4 ) psirange = 1;
+    if(EPOrder[i]==5) psirange = 0.8;
+    if(EPOrder[i]==6) psirange = 0.6;
+
+    hPsi[i] = subdir.make<TH1D>("psi","psi",800,-psirange,psirange);
+    hPsi[i]->SetXTitle("#Psi");
+    hPsi[i]->SetYTitle(Form("Counts (cent<80%c)",'%'));
+    
+    hPsiOffset[i] = subdir.make<TH1D>("psiOffset","psiOffset",800,-psirange,psirange);
+    hPsiOffset[i]->SetXTitle("#Psi");
+    hPsiOffset[i]->SetYTitle(Form("Counts (cent<80%c)",'%'));
+
+    
+    hPsiFlat[i] = subdir.make<TH1D>("psiFlat","psiFlat",800,-psirange,psirange);
+    hPsiFlat[i]->SetXTitle("#Psi");
+    hPsiFlat[i]->SetYTitle(Form("Counts (cent<80%c)",'%'));
 
   }
+  std::cout<<"Done with flat init"<<std::endl;
   tree = fs->make<TTree>("tree","EP tree");
 
   tree->Branch("Cent",&centval,"cent/D");
@@ -504,6 +593,8 @@ VNAnalyzer::VNAnalyzer(const edm::ParameterSet& iConfig):runno_(0)
   tree->Branch("q",       &q,       epnames.Data());
   tree->Branch("vn", &vn, epnames.Data());
   tree->Branch("mult",    &epmult,  epnames.Data());
+  tree->Branch("sumw",    &sumw,  epnames.Data());
+  tree->Branch("sumw2",    &sumw2,  epnames.Data());
   tree->Branch("Run",     &runno_,   "run/i");
   tree->Branch("Rescor",  &rescor,   epnames.Data());
   tree->Branch("RescorErr",  &rescorErr,   epnames.Data());
@@ -544,7 +635,6 @@ VNAnalyzer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
   if(runno_ != iEvent.id().run()) newrun = kTRUE;
   runno_ = iEvent.id().run();
   hrun->Fill(runno_);
-
   if(FirstEvent_ || newrun) {
     FirstEvent_ = kFALSE;
     newrun = kFALSE;
@@ -591,32 +681,44 @@ VNAnalyzer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
   // //bin = cbin/CentBinCompression_; 
   double cscale = 100./nCentBins_;
   centval = cscale*cbin;
-   Noff = getNoff( iEvent, iSetup,centval);
+  Noff = getNoff( iEvent, iSetup,centval);
   if(Noff<=0) {
     hNtrkRet->Fill(fabs(Noff));
   } else {
     hNtrkoff->Fill(Noff);
+  }
+  if(useNtrkBins_) {
+    //bin = (int) (0.99*((float)NumFlatBins_)*((float) (Noff-Noffmin_)/(float) (Noffmax_-Noffmin_)));
+    int bin = NtrkToBin(Noff);
+    
+    centval = bin;
   }
   hcent->Fill(centval);
   hcentbins->Fill(cbin);
   // //
   // //Get Vertex
   // //
-  int vs_sell;   // vertex collection size
-  float vzr_sell;
   iEvent.getByToken(vertexToken,vertex_);
   if(!vertex_.isValid()) {
     std::cout<<"Error! Can't get vertex!"<<std::endl;
     return;
   }
-  const reco::VertexCollection * vertices3 = vertex_.product();
-  vs_sell = vertices3->size();
-  if(vs_sell>0) {
-    vzr_sell = vertices3->begin()->z();
-  } else
-    vzr_sell = -999.9;
+
+  iEvent.getByToken(vertexToken, vertex_);
+  VertexCollection recoVertices = *vertex_;
+  if ( recoVertices.size() > 100 ) return;
+  sort(recoVertices.begin(), recoVertices.end(), [](const reco::Vertex &a, const reco::Vertex &b){
+      if ( a.tracksSize() == b.tracksSize() ) return a.chi2() < b.chi2();
+      return a.tracksSize() > b.tracksSize();
+    });
   
-  vtx = vzr_sell;
+  int primaryvtx = 0;
+  
+  double vz = recoVertices[primaryvtx].z();
+  if (fabs(vz) < -15 || fabs(vz) > 15) {
+    return;
+  }
+  vtx = vz; 
   // //
   // //Get Event Planes
   // //
@@ -628,6 +730,18 @@ VNAnalyzer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
    }
   
    Int_t indx = 0;
+   for(int i = 0; i<NumEPNames; i++) {
+     epang[i] = -10;
+     epsin[i] = 0;
+     epcos[i] = 0;
+     qx[i] = 0;
+     qy[i] = 0;
+     q[i] = 0;
+     vn[i] = 0;
+     epmult[i] = 0;
+     sumw[i] = 0;
+     sumw2[i] = 0;
+   }
    for (EvtPlaneCollection::const_iterator rp = inputPlanes_->begin();rp !=inputPlanes_->end(); rp++) {
      if(indx != rp->indx() ) {
        cout<<"EP inconsistency found. Abort."<<endl;
@@ -638,12 +752,19 @@ VNAnalyzer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
        eporig[indx]=rp->angle(0);
        epsin[indx] = rp->sumSin();
        epcos[indx] = rp->sumCos();
-       
+       if(centval<80 && fabs(vtx)<15) {
+	 hPsi[indx]->Fill(rp->angle(0));
+	 hPsiOffset[indx]->Fill(rp->angle(1));
+	 hPsiFlat[indx]->Fill(rp->angle(2));
+       }
+      
        qx[indx]  = rp->qx(); 
        qy[indx]  = rp->qy();
        q[indx]   = rp->q();
        vn[indx] = rp->vn(0);
        epmult[indx] = (double) rp->mult();
+       sumw[indx] = rp->sumw();
+       sumw2[indx] = rp->sumw2();
        
        rescor[indx] = flat[indx]->getCentRes1((int) centval);
        rescorErr[indx] = flat[indx]->getCentResErr1((int) centval);
@@ -654,9 +775,9 @@ VNAnalyzer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 
   ntrkval = Noff;
   if ( Noff == -2 ) {
-     return;
-   }
-   hNtrkoff->Fill(Noff);
+    return;
+  }
+  hNtrkoff->Fill(Noff);
 
    tree->Fill(); 
 }
