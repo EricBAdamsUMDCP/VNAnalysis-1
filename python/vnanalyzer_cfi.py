@@ -30,5 +30,7 @@ vnanalyzer = cms.EDAnalyzer("VNAnalyzer",
                             dzdzerror_ = cms.untracked.double(3.0),
                             d0d0error_ = cms.untracked.double(3.0),
                             pterror_ = cms.untracked.double(0.1),
-                            MB_ = cms.untracked.bool(True)
+                            MB_ = cms.untracked.bool(True),
+                            dzerr = cms.double(10.),
+                            chi2 = cms.double(40.)
  )
