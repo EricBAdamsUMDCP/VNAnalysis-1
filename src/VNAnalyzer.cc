@@ -70,10 +70,9 @@ static const double ptbinsDefault[]={12.0, 14.0, 20.0, 26.0, 35.0, 45.0, 60.0, 8
 //  2.5,  3.0,  3.5,  4.0,  5.0,  6.0,  8.0, 
 //  10.0, 14.0, 20.0, 30.0, 40.0, 50.0, 70.0, 100.};
 
-static const int nptbinsMBDefault = 28;
+static const int nptbinsMBDefault = 16;
 static const double ptbinsMBDefault[]={0.3,0.4,0.5,  0.6,  0.8,  1.0,  1.25,  1.50,  2.0,
-				       2.5,  3.0,  3.5,  4.0,  5.0,  6.0,  7.0, 8.0, 
-				       10.0, 12.,14.0, 20.,26.,35.,45.,60.,80.,100.,200.,10000000.};
+				       2.5,  3.0,  3.5,  4.0,  5.0,  6.0,  7.0, 8.0};
 
 static const int MaxTracks = 50;
 
@@ -273,8 +272,6 @@ private:
     for(TrackCollection::const_iterator itTrack = trackCollection_->begin(); itTrack != trackCollection_->end(); ++itTrack) {    
       if ( !itTrack->quality(reco::TrackBase::highPurity) ) continue;
       if ( itTrack->charge() == 0 ) continue;
-      if(fabs(itTrack->pt()) > 2.4 ) continue;
-
       if ( fabs(itTrack->eta()) > 2.4 ) continue;
       bool bPix = false;
       int nHits = itTrack->numberOfValidHits();
@@ -296,13 +293,11 @@ private:
 	    ) {
 	  continue;
 	}
-	
 	double d0 = -1.* itTrack->dxy(v1);
 	double derror=sqrt(itTrack->dxyError()*itTrack->dxyError()+vxError*vyError);
 	if ( fabs( d0/derror ) > 3.0 ) {
 	  continue;
 	}
-	
 	double dz=itTrack->dz(v1);
 	double dzerror=sqrt(itTrack->dzError()*itTrack->dzError()+vzError*vzError);
 	if ( fabs( dz/dzerror ) > 3.0 ) {
@@ -310,7 +305,7 @@ private:
 	}
       }
       
-      if(itTrack->eta()<1&&cent>=0&&cent<5) hptNtrk->Fill(itTrack->pt());
+      if(itTrack->eta()<1&&cent>=0&&cent<50) hptNtrk->Fill(itTrack->pt());
       Noff++;
     }
     if(Noff < Noffmin_ || Noff > Noffmax_) return -2;
@@ -319,8 +314,6 @@ private:
     for(TrackCollection::const_iterator itTrack = trackCollection_->begin(); itTrack != trackCollection_->end(); ++itTrack) {    
       if ( !itTrack->quality(reco::TrackBase::highPurity) ) continue;
       if ( itTrack->charge() == 0 ) continue;
-      if(fabs(itTrack->pt()) > 2.4 ) continue;
-      
       if ( fabs(itTrack->eta()) > 2.4 ) continue;
       bool bPix = false;
       int nHits = itTrack->numberOfValidHits();
