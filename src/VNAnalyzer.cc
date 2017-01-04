@@ -14,6 +14,7 @@
 #include "FWCore/Framework/interface/EDAnalyzer.h"
 
 #include "FWCore/Framework/interface/Event.h"
+#include "FWCore/Framework/interface/EventSetup.h"
 #include "FWCore/Framework/interface/MakerMacros.h"
 
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
@@ -210,6 +211,8 @@ private:
   int EPOrder_;
   TH2D * qxtrk;
   TH2D * qytrk;
+  TH2D * qxtrk3;
+  TH2D * qytrk3;
   TH2D * qcnt;
   TH2D * wqxtrk;
   TH2D * wqytrk;
@@ -238,6 +241,10 @@ private:
     using namespace reco;
     qxtrk->Reset();
     qytrk->Reset();
+    if(EPOrder_ == 2) {
+      qxtrk3->Reset();
+      qytrk3->Reset();
+    }
     qcnt->Reset();
     if(teff) {
       wqxtrk->Reset();
@@ -351,6 +358,10 @@ private:
       if(itTrack->eta()<1&&cent>=0&&cent<5&&itTrack->pt()>0.4) hptNtrkGood->Fill(itTrack->pt());
       qxtrk->Fill(itTrack->pt(), itTrack->eta(), TMath::Cos(EPOrder_*itTrack->phi()));
       qytrk->Fill(itTrack->pt(),itTrack->eta(), TMath::Sin(EPOrder_*itTrack->phi()));
+      if(EPOrder_ == 2) {
+	qxtrk3->Fill(itTrack->pt(), itTrack->eta(), TMath::Cos(3.*itTrack->phi()));
+	qytrk3->Fill(itTrack->pt(),itTrack->eta(), TMath::Sin(3.*itTrack->phi()));
+      }
       qcnt->Fill(itTrack->pt(), itTrack->eta());
       avpt->Fill(itTrack->pt(), itTrack->eta(), itTrack->pt());
       
@@ -509,6 +520,10 @@ VNAnalyzer::VNAnalyzer(const edm::ParameterSet& iConfig):runno_(0)
   std::cout<<"npt: "<<npt<<std::endl;
   qxtrk = fs->make<TH2D>(Form("qxtrk_v%d",EPOrder_),Form("qxtrk_v%d",EPOrder_),npt,ptbins, netabinsDefault, etabinsDefault);
   qytrk = fs->make<TH2D>(Form("qytrk_v%d",EPOrder_),Form("qytrk_v%d",EPOrder_),npt,ptbins, netabinsDefault, etabinsDefault);
+  if(EPOrder_ == 2) {
+    qxtrk3 = fs->make<TH2D>("qxtrk_v3","qxtrk_v3",npt,ptbins, netabinsDefault, etabinsDefault);
+    qytrk3 = fs->make<TH2D>("qytrk_v3","qytrk_v3",npt,ptbins, netabinsDefault, etabinsDefault);
+  }
   qcnt =  fs->make<TH2D>(Form("qcnt_v%d",EPOrder_), Form("qcnt_v%d",EPOrder_),npt,ptbins, netabinsDefault, etabinsDefault);
   if(teff) {
     wqxtrk = fs->make<TH2D>(Form("wqxtrk_v%d",EPOrder_),Form("wqxtrk_v%d",EPOrder_),npt,ptbins, netabinsDefault, etabinsDefault);
@@ -593,6 +608,10 @@ VNAnalyzer::VNAnalyzer(const edm::ParameterSet& iConfig):runno_(0)
   tree->Branch("RescorErr",  &rescorErr,   epnames.Data());
   tree->Branch(Form("qxtrk_v%d",EPOrder_),   "TH2D",  &qxtrk, 128000, 0);
   tree->Branch(Form("qytrk_v%d",EPOrder_),   "TH2D",  &qytrk, 128000, 0);
+  if(EPOrder_ == 2) {
+    tree->Branch("qxtrk_v3", "TH2D",  &qxtrk3, 128000, 0);
+    tree->Branch("qytrk_v3", "TH2D",  &qytrk3, 128000, 0);
+  }
   tree->Branch(Form("qcnt_v%d",EPOrder_),    "TH2D",  &qcnt, 128000, 0);
   if(teff) {
     tree->Branch(Form("wqxtrk_v%d",EPOrder_),   "TH2D",  &wqxtrk, 128000, 0);
